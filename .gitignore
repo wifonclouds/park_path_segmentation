@@ -1,3 +1,25 @@
-
-# Local virtual environment
+# Python
+__pycache__/
+*.py[cod]
 .venv/
+venv/
+.env
+.pytest_cache/
+
+# Large point-cloud datasets
+input/*
+!input/.gitkeep
+*.las
+*.laz
+*.e57
+*.ply
+*.pcd
+*.xyz
+*.pts
+*.bin
+
+# Generated results and temporary files
+output/*
+!output/.gitkeep
+*.tmp
+*.log
