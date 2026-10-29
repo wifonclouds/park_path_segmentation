@@ -99,7 +99,7 @@ def main():
     ap.add_argument("--min-offset", type=float, default=0.45)
     ap.add_argument("--max-offset", type=float, default=4.0)
     ap.add_argument("--bin-size", type=float, default=0.10)
-    ap.add_argument("--window", type=float, default=0.35)
+    ap.add_argument("--window", type=float, default=0.25)
     ap.add_argument("--min-points", type=int, default=5)
     ap.add_argument("--rgb-weight", type=float, default=1.0)
     ap.add_argument("--height-weight", type=float, default=0.8)
