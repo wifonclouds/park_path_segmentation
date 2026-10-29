@@ -165,8 +165,8 @@ def main():
                             if np.isfinite(lo) else [np.nan, np.nan, np.nan])
             right_xyz.append([p[0] - normal[0] * ro, p[1] - normal[1] * ro, p[2]]
                              if np.isfinite(ro) else [np.nan, np.nan, np.nan])
-        for layer_name, coords, color in (("SIDEWALK_LEFT", left_xyz, 3),
-                                          ("SIDEWALK_RIGHT", right_xyz, 1)):
+        for layer_name, coords, color in (("SIDEWALK_LEFT", left_xyz, 6),  # magenta, distinct from green axis
+                                          ("SIDEWALK_RIGHT", right_xyz, 1)):  # red
             arr = np.asarray(coords)
             valid = np.all(np.isfinite(arr), axis=1)
             ids = np.where(valid)[0]
