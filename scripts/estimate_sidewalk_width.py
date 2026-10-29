@@ -36,6 +36,8 @@ def arguments():
     parser.add_argument("--min-consecutive-bins", type=int, default=2)
     parser.add_argument("--continuity-weight", type=float, default=3.0)
     parser.add_argument("--smooth-window", type=int, default=5)
+    parser.add_argument("--width-mode", choices=("constant", "variable"), default="constant",
+                        help="constant: robust median width per DXF polyline (default); variable: width per station")
     parser.add_argument("--max-stations-per-polyline", type=int, default=0)
     parser.add_argument("--chunk-size", type=int, default=1000000)
     parser.add_argument("--no-out-dxf", action="store_true")
@@ -231,6 +233,24 @@ def smooth(values, window):
     return result
 
 
+def robust_constant_width(values, confidences, min_confidence=0.25):
+    """Estimate one stable offset for a polyline, rejecting local RGB outliers."""
+    valid = [(float(v), float(c)) for v, c in zip(values, confidences) if v is not None]
+    if not valid:
+        return None
+
+    reliable = [v for v, c in valid if c >= min_confidence]
+    sample = np.asarray(reliable if len(reliable) >= 5 else [v for v, _ in valid], dtype=float)
+    median = float(np.median(sample))
+    mad = float(np.median(np.abs(sample - median)))
+    # A 15 cm floor prevents tiny MAD values from rejecting ordinary bin noise.
+    limit = max(0.15, 3.0 * 1.4826 * mad)
+    inliers = sample[np.abs(sample - median) <= limit]
+    if len(inliers) >= 3:
+        median = float(np.median(inliers))
+    return median
+
+
 def analyse(polyline, stations, xy, rgb, args, tree):
     long_half = args.longitudinal_half or args.spacing * 0.6
     left, right, lc, rc, statuses = [], [], [], [], []
@@ -342,8 +362,16 @@ def main():
                    "left_confidence": lconf, "right_confidence": rconf, "status": status}
             rows.append(row)
         rows_by_id[polyline["id"]] = rows
-        for key, side in (("left", "left"), ("right", "right")):
-            values = smooth([r[key] for r in rows], args.smooth_window)
+        for key, confidence_key in (("left", "left_confidence"), ("right", "right_confidence")):
+            raw_values = [r[key] for r in rows]
+            if args.width_mode == "constant":
+                width = robust_constant_width(raw_values, [r[confidence_key] for r in rows])
+                # A stable offset is used along this entire DXF polyline. This removes
+                # station-to-station RGB jitter while allowing other polylines to have
+                # different widths. If no usable edge was found, keep values missing.
+                values = [width] * len(rows) if width is not None else raw_values
+            else:
+                values = smooth(raw_values, args.smooth_window)
             for row, value in zip(rows, values):
                 row[key] = value
         for row in rows:
