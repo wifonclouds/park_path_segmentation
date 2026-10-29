@@ -156,27 +156,64 @@ def rgb_profile(lateral, rgb, side, width, bin_size, min_points):
 
 
 def find_edge(centers, values, core, threshold, consecutive, previous, continuity):
+    """Find a sustained RGB boundary, not merely the strongest colour far from the core.
+
+    A candidate is a transition from bins whose colour resembles the sidewalk core
+    to consecutive bins whose colour differs from it. Scoring the adjacent-bin
+    contrast helps avoid selecting isolated colour patches inside the pavement.
+    """
     candidates = []
-    for i, value in enumerate(values):
-        if value is None or np.linalg.norm(value - core) < threshold:
+    if len(values) < consecutive + 1:
+        return None, 0.0
+
+    core_dist = [
+        None if value is None else float(np.linalg.norm(value - core))
+        for value in values
+    ]
+
+    for i in range(len(values) - consecutive):
+        inside, outside = values[i], values[i + 1]
+        if inside is None or outside is None:
             continue
+
+        # The bin immediately inside the edge should still look like pavement.
+        if core_dist[i] > threshold * 1.5:
+            continue
+
+        # Require a sustained change outside the edge to reject isolated RGB noise.
         run = 0
-        for j in range(i, min(i + consecutive, len(values))):
-            if values[j] is not None and np.linalg.norm(values[j] - core) >= threshold:
+        outside_contrasts = []
+        for j in range(i + 1, min(i + 1 + consecutive, len(values))):
+            if values[j] is not None and core_dist[j] is not None and core_dist[j] >= threshold:
                 run += 1
+                outside_contrasts.append(core_dist[j])
             else:
                 break
         if run < consecutive:
             continue
-        contrast = float(np.linalg.norm(value - core))
-        score = contrast - 8.0 * centers[i] - 5.0 * (run - 1)
+
+        transition = float(np.linalg.norm(outside - inside))
+        if transition < threshold * 0.5:
+            continue
+
+        width = float((centers[i] + centers[i + 1]) / 2.0)
+        outside_contrast = float(np.median(outside_contrasts))
+        # Prefer a clear, sustained colour boundary. Penalize implausibly large
+        # widths and sudden changes from the previous station, without forcing
+        # every section to have the same width.
+        score = transition + 0.35 * outside_contrast - 3.0 * width
         if previous is not None:
-            score -= continuity * abs(centers[i] - previous)
-        candidates.append((score, float(centers[i]), contrast))
+            score -= continuity * 5.0 * abs(width - previous)
+        candidates.append((score, width, transition, outside_contrast))
+
     if not candidates:
         return None, 0.0
-    _, width, contrast = max(candidates)
-    confidence = float(np.clip((contrast - threshold) / max(threshold, 1.0), 0, 1))
+
+    _, width, transition, outside_contrast = max(candidates)
+    confidence = float(np.clip(
+        (min(transition, outside_contrast) - threshold * 0.5) /
+        max(threshold * 1.5, 1.0), 0.0, 1.0
+    ))
     return width, confidence
 
 
