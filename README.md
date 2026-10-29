@@ -2,10 +2,6 @@
 
 Python project for segmenting paved paths from a terrain-classified point cloud using RGB/color features.
 
-## Current objective
-
-The input is a cleaned terrain point cloud exported from CloudCompare after CSF ground extraction. Pavement and grass have visibly different RGB distributions. The first step is to inspect the color distribution and establish a reproducible baseline before implementing automated classification.
-
 ## Repository layout
 
 ```text
@@ -13,8 +9,8 @@ park_path_segmentation/
 ├── input/                 # Local point-cloud inputs (not committed)
 ├── output/                # Generated results (not committed)
 ├── scripts/
-│   └── segment_paving_rgb.py
-├── .gitignore
+│   ├── segment_paving_rgb.py
+│   └── estimate_sidewalk_width.py
 ├── requirements.txt
 └── README.md
 ```
@@ -31,14 +27,37 @@ pip install -r requirements.txt
 mkdir -p input output
 ```
 
-Put the cleaned terrain point cloud in `input/`. LAS and LAZ files are ignored by Git because they can be very large and may contain project data.
+Put local point clouds and DXF files in `input/`. LAS/LAZ files and generated outputs should not be committed because they can be large and may contain project data.
 
-## First run
+## RGB inspection
 
 ```bash
 python scripts/segment_paving_rgb.py input/your_terrain_cloud.las --output-dir output
 ```
 
-The script currently reports RGB/color statistics and saves a compact color sample for exploration; it does **not** yet produce a final pavement segmentation. The next development step is to inspect the observed colors, then add a configurable classifier and export separate pavement/non-pavement point clouds.
+This script reports RGB/color statistics and saves a compact color sample for exploration. It is not a final pavement segmentation classifier.
 
-Use `--help` to see available options.
+## Estimate sidewalk width from DXF polylines
+
+`estimate_sidewalk_width.py` samples every DXF `POLYLINE` and `LWPOLYLINE` at regular intervals, projects 2D/3D polylines to XY, and estimates left/right sidewalk edges from RGB transitions in the LAS/LAZ point cloud. Point Z is intentionally ignored when selecting nearby points. The script reads the point cloud in chunks and uses SciPy's `cKDTree` for faster neighbourhood queries.
+
+Example using the project input folder:
+
+```bash
+python scripts/estimate_sidewalk_width.py \
+  input/ground.las input/path.dxf \
+  --spacing 0.25 \
+  --max-width 2.0 \
+  --csv output/sidewalk_width.csv \
+  --out-dxf output/sidewalk_boundaries.dxf
+```
+
+For a quick test, limit the number of cross-sections per polyline:
+
+```bash
+python scripts/estimate_sidewalk_width.py \
+  input/ground.las input/path.dxf \
+  --max-stations-per-polyline 100
+```
+
+Use `--help` to list all parameters. The CSV contains station coordinates, left/right/total width estimates, confidence heuristics and a status field. The output DXF contains estimated boundary polylines on separate layers. RGB transitions are only candidate edges, not guaranteed sidewalk boundaries; inspect the results in CloudCompare before using measurements. The analysis is entirely in XY, so points at different elevations can contribute if they are close in plan view.
