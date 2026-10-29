@@ -36,8 +36,12 @@ def arguments():
     parser.add_argument("--min-consecutive-bins", type=int, default=2)
     parser.add_argument("--continuity-weight", type=float, default=3.0)
     parser.add_argument("--smooth-window", type=int, default=5)
-    parser.add_argument("--width-mode", choices=("constant", "variable"), default="constant",
-                        help="constant: robust median width per DXF polyline (default); variable: width per station")
+    parser.add_argument("--width-mode", choices=("piecewise", "constant", "variable"), default="piecewise",
+                        help="piecewise: stable widths with detected changes (default); constant: one width per polyline; variable: smoothed station widths")
+    parser.add_argument("--width-change-threshold", type=float, default=0.25,
+                        help="minimum width change in metres to consider a new segment")
+    parser.add_argument("--min-width-segment", type=int, default=8,
+                        help="minimum stations in each constant-width segment")
     parser.add_argument("--max-stations-per-polyline", type=int, default=0)
     parser.add_argument("--chunk-size", type=int, default=1000000)
     parser.add_argument("--no-out-dxf", action="store_true")
@@ -251,6 +255,63 @@ def robust_constant_width(values, confidences, min_confidence=0.25):
     return median
 
 
+def piecewise_constant_widths(values, confidences, change_threshold=0.25, min_segment=8):
+    """Fit stable widths along stretches while allowing genuine width changes."""
+    n = len(values)
+    valid_idx = np.array([i for i, value in enumerate(values) if value is not None], dtype=int)
+    if not len(valid_idx):
+        return [None] * n
+
+    raw = np.asarray([float(values[i]) for i in valid_idx], dtype=float)
+    conf = np.asarray([float(confidences[i]) for i in valid_idx], dtype=float)
+    reliable = conf >= 0.25
+    if reliable.sum() >= max(5, min_segment // 2):
+        fit_values = raw.copy()
+        fit_values[~reliable] = np.interp(valid_idx[~reliable], valid_idx[reliable], raw[reliable])
+    else:
+        fit_values = raw.copy()
+
+    fitted = np.interp(np.arange(n), valid_idx, fit_values)
+    boundaries = [0, n]
+
+    def split(start, end, depth=0):
+        if end - start < 2 * min_segment or depth >= 10:
+            return
+        section = fitted[start:end]
+        base_median = float(np.median(section))
+        base_sse = float(np.sum((section - base_median) ** 2))
+        best = None
+        for cut in range(start + min_segment, end - min_segment + 1):
+            left = fitted[start:cut]
+            right = fitted[cut:end]
+            left_med, right_med = float(np.median(left)), float(np.median(right))
+            if abs(left_med - right_med) < change_threshold:
+                continue
+            sse = float(np.sum((left - left_med) ** 2) + np.sum((right - right_med) ** 2))
+            if best is None or sse < best[0]:
+                best = (sse, cut)
+        if best is not None and base_sse > 0 and best[0] < base_sse * 0.70:
+            _, cut = best
+            boundaries.append(cut)
+            split(start, cut, depth + 1)
+            split(cut, end, depth + 1)
+
+    split(0, n)
+    boundaries = sorted(set(boundaries))
+    output = [None] * n
+    first, last = int(valid_idx[0]), int(valid_idx[-1])
+    for start, end in zip(boundaries[:-1], boundaries[1:]):
+        segment = fitted[start:end]
+        median = float(np.median(segment))
+        for i in range(start, end):
+            output[i] = median
+    for i in range(first):
+        output[i] = None
+    for i in range(last + 1, n):
+        output[i] = None
+    return output
+
+
 def analyse(polyline, stations, xy, rgb, args, tree):
     long_half = args.longitudinal_half or args.spacing * 0.6
     left, right, lc, rc, statuses = [], [], [], [], []
@@ -364,12 +425,17 @@ def main():
         rows_by_id[polyline["id"]] = rows
         for key, confidence_key in (("left", "left_confidence"), ("right", "right_confidence")):
             raw_values = [r[key] for r in rows]
+            confidences = [r[confidence_key] for r in rows]
             if args.width_mode == "constant":
-                width = robust_constant_width(raw_values, [r[confidence_key] for r in rows])
-                # A stable offset is used along this entire DXF polyline. This removes
-                # station-to-station RGB jitter while allowing other polylines to have
-                # different widths. If no usable edge was found, keep values missing.
+                width = robust_constant_width(raw_values, confidences)
                 values = [width] * len(rows) if width is not None else raw_values
+            elif args.width_mode == "piecewise":
+                values = piecewise_constant_widths(
+                    raw_values,
+                    confidences,
+                    change_threshold=args.width_change_threshold,
+                    min_segment=max(2, args.min_width_segment),
+                )
             else:
                 values = smooth(raw_values, args.smooth_window)
             for row, value in zip(rows, values):
