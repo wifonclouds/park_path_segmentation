@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Segment a sidewalk from a LAS point cloud using a 3D DXF polyline.
+"""Remove all points above or below the XY corridor defined by a 3D DXF polyline.
 
-Default inputs: input/GP.las and poly.dxf
-Outputs: output/sidewalk_segmented.las and output/remaining_points.las
+The corridor is determined by horizontal (XY) distance and width only; points are
+selected regardless of their Z/elevation. Default inputs: input/GP.las and poly.dxf
+Outputs: output/corridor_points_removed.las and output/remaining_points.las
 
 Optional variable-width CSV columns:
     distance_m,half_width_m
@@ -82,8 +83,6 @@ def main():
     ap.add_argument("--output-dir", type=Path, default=Path("output"))
     ap.add_argument("--half-width", type=float, default=1.0,
                     help="Default half-width in metres.")
-    ap.add_argument("--vertical-tolerance", type=float, default=0.10,
-                    help="Allowed vertical difference from polyline, in metres.")
     ap.add_argument("--spacing", type=float, default=0.25,
                     help="Sampling interval along the polyline, in metres.")
     ap.add_argument("--chunk-size", type=int, default=250_000)
@@ -91,8 +90,8 @@ def main():
                     help="CSV with distance_m,half_width_m for variable width.")
     args = ap.parse_args()
 
-    if args.half_width <= 0 or args.spacing <= 0 or args.vertical_tolerance < 0:
-        ap.error("half-width and spacing must be > 0; vertical tolerance must be >= 0.")
+    if args.half_width <= 0 or args.spacing <= 0:
+        ap.error("half-width and spacing must be > 0.")
     for p in (args.input, args.dxf):
         if not p.exists():
             ap.error(f"File not found: {p}")
@@ -124,9 +123,9 @@ def main():
     width_s, width_vals = read_width_profile(args.width_profile, total_length, args.half_width)
 
     print(f"Polyline vertices: {len(vertices)}; length: {total_length:.2f} m")
-    print(f"Samples: {len(samples):,}; vertical tolerance: ±{args.vertical_tolerance:.3f} m")
+    print(f"Samples: {len(samples):,}; selecting points at any elevation within the XY corridor")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    sidewalk_path = args.output_dir / "sidewalk_segmented.las"
+    sidewalk_path = args.output_dir / "corridor_points_removed.las"
     rest_path = args.output_dir / "remaining_points.las"
     total = selected = 0
 
@@ -162,11 +161,11 @@ def main():
                     best_s[chosen] = cumulative[sid] + t[improve] * lengths[sid]
                     best_z[chosen] = q[improve, 2]
 
-                dz = np.abs(xyz[:, 2] - best_z)
-                # Remove vertical component from 3D distance to obtain XY lateral distance.
+                # Use XY distance only: remove points within the corridor regardless of height.
+                # This includes points on the pavement, above it, and below it.
                 lateral = np.sqrt(np.maximum(best_d2 - (xyz[:, 2] - best_z) ** 2, 0.0))
                 half_width = np.interp(best_s, width_s, width_vals)
-                mask = (lateral <= half_width) & (dz <= args.vertical_tolerance)
+                mask = lateral <= half_width
                 out_side.write_points(points[mask])
                 out_rest.write_points(points[~mask])
                 total += npts
@@ -176,7 +175,7 @@ def main():
 
     print(f"\nDone. Selected {selected:,}/{total:,} points "
           f"({100*selected/max(total,1):.2f}%).")
-    print(f"Sidewalk: {sidewalk_path}")
+    print(f"Points inside corridor (all elevations; remove/inspect): {sidewalk_path}")
     print(f"Remaining: {rest_path}")
 
 
