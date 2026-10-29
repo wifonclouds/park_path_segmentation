@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Segment sidewalk points near every 3D line in a DXF using GDAL/OGR.
+"""Select all points inside the XY corridors of DXF polylines, regardless of elevation.
 
 Defaults from the repository root:
   input/ground.las, input/path.dxf
-  output/sidewalk_segmented.las, output/remaining_points.las
+  output/corridor_points_removed.las, output/remaining_points.las
 
 Optional width-profile CSV columns:
   polyline_id,distance_m,half_width_m
@@ -145,7 +145,6 @@ def main():
     parser.add_argument("--dxf", type=Path, default=Path("input/path.dxf"))
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
     parser.add_argument("--half-width", type=float, default=1.1)
-    parser.add_argument("--vertical-tolerance", type=float, default=0.10)
     parser.add_argument("--spacing", type=float, default=0.25)
     parser.add_argument("--chunk-size", type=int, default=250_000)
     parser.add_argument("--width-profile", type=Path, default=None,
@@ -153,8 +152,8 @@ def main():
     parser.add_argument("--neighbors", type=int, default=12,
                         help="Nearest XY samples checked per point")
     args = parser.parse_args()
-    if args.half_width <= 0 or args.spacing <= 0 or args.vertical_tolerance < 0:
-        parser.error("--half-width/--spacing must be > 0; vertical tolerance must be >= 0")
+    if args.half_width <= 0 or args.spacing <= 0:
+        parser.error("--half-width and --spacing must be > 0")
     if args.neighbors < 1:
         parser.error("--neighbors must be >= 1")
     for path in (args.input, args.dxf):
@@ -172,12 +171,12 @@ def main():
 
     print(f"Polilinie odczytane z DXF: {len(lines)}")
     print(f"Segmenty: {len(seg_a):,}; próbki co maks. {args.spacing:.2f} m: {len(sample_xy):,}")
-    print(f"Połowa szerokości: {args.half_width:.2f} m; tolerancja Z: ±{args.vertical_tolerance:.2f} m")
+    print(f"Połowa szerokości: {args.half_width:.2f} m; wysokość Z nie jest filtrowana")
     if profiles:
         print(f"Polilinie z profilem zmiennej szerokości: {len(profiles)}")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    sidewalk_path = args.output_dir / "sidewalk_segmented.las"
+    sidewalk_path = args.output_dir / "corridor_points_removed.las"
     rest_path = args.output_dir / "remaining_points.las"
     total = selected_total = 0
     with laspy.open(args.input) as reader:
@@ -224,8 +223,8 @@ def main():
                             left=widths[0], right=widths[-1]
                         )
                 lateral = np.sqrt(best_d2)
-                dz = np.abs(xyz[:, 2] - best_z)
-                mask = (lateral <= half_width) & (dz <= args.vertical_tolerance)
+                # XY-only corridor test: keep points at any elevation (above or below the polyline).
+                mask = lateral <= half_width
                 out_side.write_points(points[mask])
                 out_rest.write_points(points[~mask])
                 total += n_points
@@ -235,7 +234,7 @@ def main():
 
     print(f"\nGotowe: {selected_total:,}/{total:,} punktów "
           f"({100 * selected_total / max(total, 1):.2f}%) przypisano do chodników.")
-    print(f"Chodniki: {sidewalk_path}")
+    print(f"Punkty w korytarzach (wszystkie wysokości): {sidewalk_path}")
     print(f"Pozostałe: {rest_path}")
 
 
