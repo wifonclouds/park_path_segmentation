@@ -200,6 +200,9 @@ def classify_chunk(points_xy, spatial, default_width, max_axis_distance, candida
         best_station[update] = (st0s[ids] + t * (st1s[ids] - st0s[ids]))[update]
         best_lateral[update] = lateral[update]
 
+    # Reject points too far from every axis; classification uses XY only.
+    keep = best_dist <= max_axis_distance
+
     # Classification is intentionally performed in XY only: all elevations are included.
     left_width = np.full(len(points_xy), default_width, dtype=float)
     right_width = np.full(len(points_xy), default_width, dtype=float)
