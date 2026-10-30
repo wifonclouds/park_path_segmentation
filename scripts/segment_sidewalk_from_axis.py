@@ -74,6 +74,37 @@ def edge_at_transect(lat, z, rgb, side, args):
     return best_offset, min(1.0, best_score)
 
 
+def dominant_corridor_width(left, right, bin_width, min_samples):
+    """Return the mean width of the most frequent width band."""
+    left = np.asarray(left, dtype=float)
+    right = np.asarray(right, dtype=float)
+    valid = np.isfinite(left) & np.isfinite(right) & ((left + right) > 0)
+    widths = left[valid] + right[valid]
+    if len(widths) < min_samples:
+        return None, int(len(widths))
+    edges = np.arange(0.0, max(float(widths.max()) + bin_width, bin_width * 2), bin_width)
+    if len(edges) < 2:
+        return None, int(len(widths))
+    counts, edges = np.histogram(widths, bins=edges)
+    mode = int(np.argmax(counts))
+    in_mode = (widths >= edges[mode]) & (widths < edges[mode + 1])
+    if int(in_mode.sum()) < min_samples:
+        return None, int(in_mode.sum())
+    return float(np.mean(widths[in_mode])), int(in_mode.sum())
+
+
+def unify_corridor_width(left, right, target_width):
+    """Scale both side offsets proportionally, preserving their local balance."""
+    left = np.asarray(left, dtype=float).copy()
+    right = np.asarray(right, dtype=float).copy()
+    valid = np.isfinite(left) & np.isfinite(right) & ((left + right) > 0)
+    current = left[valid] + right[valid]
+    scale = target_width / current
+    left[valid] *= scale
+    right[valid] *= scale
+    return left, right
+
+
 def smooth_offsets(values, window):
     x = np.asarray(values, float)
     good = np.isfinite(x)
@@ -108,8 +139,10 @@ def main():
     ap.add_argument("--height-scale", type=float, default=0.08)
     ap.add_argument("--min-score", type=float, default=0.28)
     ap.add_argument("--smooth-window", type=int, default=9)
+    ap.add_argument("--width-bin", type=float, default=0.25, help="Szerokość przedziału histogramu [m].")
+    ap.add_argument("--min-width-samples", type=int, default=5, help="Minimalna liczba przekrojów w dominującym przedziale.")
     args = ap.parse_args()
-    if args.spacing <= 0 or args.bin_size <= 0 or args.max_offset <= args.min_offset:
+    if args.spacing <= 0 or args.bin_size <= 0 or args.max_offset <= args.min_offset or args.width_bin <= 0:
         ap.error("Nieprawidłowe wartości spacing/offset.")
 
     args.out_dxf.parent.mkdir(parents=True, exist_ok=True)
@@ -158,6 +191,24 @@ def main():
 
         left_vals = smooth_offsets(left_vals, args.smooth_window)
         right_vals = smooth_offsets(right_vals, args.smooth_window)
+
+        target_width, width_samples = dominant_corridor_width(
+            left_vals, right_vals, args.width_bin, args.min_width_samples
+        )
+        if target_width is not None:
+            left_vals, right_vals = unify_corridor_width(left_vals, right_vals, target_width)
+            print(
+                f"Polilinia {line_no}: ujednolicona szerokość {target_width:.2f} m "
+                f"(na podstawie {width_samples} przekrojów)",
+                flush=True,
+            )
+        else:
+            print(
+                f"Polilinia {line_no}: pominięto ujednolicanie — za mało wiarygodnych przekrojów "
+                f"({width_samples})",
+                flush=True,
+            )
+
         left_xyz, right_xyz = [], []
         for (p, tangent), lo, ro in zip(samples, left_vals, right_vals):
             normal = np.array([-tangent[1], tangent[0]])
