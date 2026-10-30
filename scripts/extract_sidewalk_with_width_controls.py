@@ -198,7 +198,7 @@ def classify_chunk(points_xyz, spatial, default_width, max_axis_distance, vertic
         best_dist[update] = dist[update]
         best_axis[update] = axis_ids[ids[update]]
         best_station[update] = (st0s[ids] + t * (st1s[ids] - st0s[ids]))[update]
-        best_lateral[update] = lateral[update]\n        best_axis_z[update] = (a[:, 2] + t * (b[:, 2] - a[:, 2]))[update]
+        best_lateral[update] = lateral[update]\n        best_axis_z[update] = (p0s[ids, 2] + t * (p1s[ids, 2] - p0s[ids, 2]))[update]
 
     keep = ((best_dist <= max_axis_distance) &\n            (np.abs(points_xyz[:, 2] - best_axis_z) <= vertical_tolerance))
     left_width = np.full(len(points_xy), default_width, dtype=float)
