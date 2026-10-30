@@ -141,8 +141,9 @@ def main():
     ap.add_argument("--smooth-window", type=int, default=9)
     ap.add_argument("--width-bin", type=float, default=0.25, help="Szerokość przedziału histogramu [m].")
     ap.add_argument("--min-width-samples", type=int, default=5, help="Minimalna liczba przekrojów w dominującym przedziale.")
+    ap.add_argument("--corridor-smooth-window", type=int, default=31, help="Długość wygładzania po osi w próbkach (31 przy spacing 0.25 m to ok. 7.5 m).")
     args = ap.parse_args()
-    if args.spacing <= 0 or args.bin_size <= 0 or args.max_offset <= args.min_offset or args.width_bin <= 0:
+    if args.spacing <= 0 or args.bin_size <= 0 or args.max_offset <= args.min_offset or args.width_bin <= 0 or args.corridor_smooth_window < 3:
         ap.error("Nieprawidłowe wartości spacing/offset.")
 
     args.out_dxf.parent.mkdir(parents=True, exist_ok=True)
@@ -196,7 +197,15 @@ def main():
             left_vals, right_vals, args.width_bin, args.min_width_samples
         )
         if target_width is not None:
-            left_vals, right_vals = unify_corridor_width(left_vals, right_vals, target_width)
+            # Smooth the corridor's lateral position along the axis, then rebuild
+            # both edges at a constant width to suppress small left/right waviness.
+            valid_pair = np.isfinite(left_vals) & np.isfinite(right_vals)
+            center_offset = np.full(len(left_vals), np.nan, dtype=float)
+            center_offset[valid_pair] = (left_vals[valid_pair] - right_vals[valid_pair]) / 2.0
+            center_offset = smooth_offsets(center_offset, args.corridor_smooth_window)
+            valid_center = np.isfinite(center_offset)
+            left_vals[valid_center] = target_width / 2.0 + center_offset[valid_center]
+            right_vals[valid_center] = target_width / 2.0 - center_offset[valid_center]
             print(
                 f"Polilinia {line_no}: ujednolicona szerokość {target_width:.2f} m "
                 f"(na podstawie {width_samples} przekrojów)",
