@@ -120,10 +120,10 @@ def prepare_axis_data(axes, controls, default_width, max_control_distance,
             count = max(1, int(np.ceil(length / segment_length)))
             for j in range(count):
                 t0, t1 = j / count, (j + 1) / count
-                p0 = a[:2] + t0 * vec
-                p1 = a[:2] + t1 * vec
-                mid = (p0 + p1) / 2.0
-                segments.append((mid, p0, p1, axis_id,
+                p0_3d = a + t0 * (b - a)
+                p1_3d = a + t1 * (b - a)
+                mid_xy = (p0_3d[:2] + p1_3d[:2]) / 2.0
+                segments.append((mid_xy, p0_3d, p1_3d, axis_id,
                                  cumulative + t0 * length,
                                  cumulative + t1 * length))
             cumulative += length
