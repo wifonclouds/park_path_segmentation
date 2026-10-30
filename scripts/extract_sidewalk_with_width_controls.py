@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Split a LAS point cloud into sidewalk corridor and remaining points.
+"""Clip a full-height vertical corridor from a LAS/LAZ point cloud.
 
-The corridor follows DXF axis polylines. Width defaults to 1.1 m on each
-side and is locally controlled by perpendicular 2-vertex sections in a
-second DXF file.
+DXF axis polylines define corridor centerlines. Perpendicular 2-vertex
+sections define left/right widths. Widths are held constant from each
+control station forward until the next control; axes without controls use
+the default width on both sides. Classification uses XY only (unlimited Z).
 """
 import argparse
 from pathlib import Path
@@ -138,8 +139,9 @@ def prepare_axis_data(axes, controls, default_width, max_control_distance,
     st0s = np.asarray([s[4] for s in segments])
     st1s = np.asarray([s[5] for s in segments])
 
-    # Build one station/left/right profile per axis. Widths are linearly
-    # interpolated between controls, with a short ramp to/from the default.
+    # Build stepwise width profiles. A control's left/right widths are
+    # held forward until the next control station. No interpolation and no
+    # transition back to default after the final control.
     width_profiles = []
     for controls_for_axis in profiles:
         if not controls_for_axis:
@@ -147,6 +149,7 @@ def prepare_axis_data(axes, controls, default_width, max_control_distance,
             continue
         arr = np.asarray(controls_for_axis, dtype=float)
         arr = arr[np.argsort(arr[:, 0])]
+
         # Merge controls that project to effectively the same station.
         merged = []
         for row in arr:
@@ -156,12 +159,7 @@ def prepare_axis_data(axes, controls, default_width, max_control_distance,
             else:
                 merged.append(tuple(row))
         arr = np.asarray(merged)
-        stations = np.concatenate(([arr[0, 0] - transition_length],
-                                   arr[:, 0],
-                                   [arr[-1, 0] + transition_length]))
-        lefts = np.concatenate(([default_width], arr[:, 1], [default_width]))
-        rights = np.concatenate(([default_width], arr[:, 2], [default_width]))
-        width_profiles.append((stations, lefts, rights))
+        width_profiles.append((arr[:, 0], arr[:, 1], arr[:, 2]))
 
     return (cKDTree(mids), p0s, p1s, axis_ids, st0s, st1s, width_profiles)
 
@@ -204,6 +202,7 @@ def classify_chunk(points_xy, spatial, default_width, max_axis_distance, candida
     keep = best_dist <= max_axis_distance
 
     # Classification is intentionally performed in XY only: all elevations are included.
+    # Widths are stepwise: use the latest control at or before the point station.
     left_width = np.full(len(points_xy), default_width, dtype=float)
     right_width = np.full(len(points_xy), default_width, dtype=float)
     for axis_id, profile in enumerate(profiles):
@@ -213,8 +212,12 @@ def classify_chunk(points_xy, spatial, default_width, max_axis_distance, candida
         if not np.any(mask):
             continue
         stations, lefts, rights = profile
-        left_width[mask] = np.interp(best_station[mask], stations, lefts)
-        right_width[mask] = np.interp(best_station[mask], stations, rights)
+        control_idx = np.searchsorted(stations, best_station[mask], side="right") - 1
+        valid = control_idx >= 0
+        selected = np.flatnonzero(mask)
+        selected = selected[valid]
+        left_width[selected] = lefts[control_idx[valid]]
+        right_width[selected] = rights[control_idx[valid]]
 
     sidewalk = keep & (best_lateral <= left_width) & (best_lateral >= -right_width)
     return sidewalk
@@ -233,8 +236,6 @@ def main():
                     help="Maximum XY distance from an axis for a point to be considered.")
     ap.add_argument("--max-control-distance", type=float, default=5.0)
     ap.add_argument("--min-perpendicularity", type=float, default=0.70)
-    ap.add_argument("--transition-length", type=float, default=5.0,
-                    help="Ramp length from/to default width outside the first/last control.")
     ap.add_argument("--segment-length", type=float, default=1.0,
                     help="Maximum length of indexed axis subsegments.")
     ap.add_argument("--chunk-size", type=int, default=500_000)
@@ -244,20 +245,20 @@ def main():
 
     if args.default_width <= 0 or args.max_axis_distance <= 0 or args.segment_length <= 0:
         ap.error("Widths and distances must be positive.")
-    if args.chunk_size < 1 or args.candidates < 1 or args.transition_length < 0:
-        ap.error("Invalid chunk size, candidates or transition length.")
+    if args.chunk_size < 1 or args.candidates < 1:
+        ap.error("Invalid chunk size or candidates.")
 
     axes = read_axes(args.axes)
     controls = read_controls(args.controls)
     spatial = prepare_axis_data(
         axes, controls, args.default_width, args.max_control_distance,
-        args.min_perpendicularity, args.transition_length, args.segment_length
+        args.min_perpendicularity, 0.0, args.segment_length
     )
     accepted_count = sum(p is not None for p in spatial[-1])
     print(f"Axes: {len(axes)} | width controls: {len(controls)} | "
           f"axes with accepted controls: {accepted_count}", flush=True)
     print(f"Default corridor: {args.default_width:.2f} m per side | "
-          f"transition: {args.transition_length:.2f} m", flush=True)
+          "width mode: stepwise hold until next control", flush=True)
 
     args.sidewalk_out.parent.mkdir(parents=True, exist_ok=True)
     args.remaining_out.parent.mkdir(parents=True, exist_ok=True)
