@@ -166,7 +166,8 @@ def prepare_axis_data(axes, controls, default_width, max_control_distance,
     return (cKDTree(mids), p0s, p1s, axis_ids, st0s, st1s, width_profiles)
 
 
-def classify_chunk(points_xyz, spatial, default_width, max_axis_distance, vertical_tolerance, candidates):\n    points_xy = points_xyz[:, :2]
+def classify_chunk(points_xyz, spatial, default_width, max_axis_distance, vertical_tolerance, candidates):
+    points_xy = points_xyz[:, :2]
     tree, p0s, p1s, axis_ids, st0s, st1s, profiles = spatial
     k = min(candidates, len(p0s))
     distances, indices = tree.query(points_xy, k=k, workers=-1)
@@ -177,11 +178,12 @@ def classify_chunk(points_xyz, spatial, default_width, max_axis_distance, vertic
     best_dist = np.full(len(points_xy), np.inf)
     best_axis = np.full(len(points_xy), -1, dtype=np.int32)
     best_station = np.zeros(len(points_xy), dtype=float)
-    best_lateral = np.zeros(len(points_xy), dtype=float)\n    best_axis_z = np.zeros(len(points_xy), dtype=float)
+    best_lateral = np.zeros(len(points_xy), dtype=float)
+    best_axis_z = np.zeros(len(points_xy), dtype=float)
 
     for rank in range(k):
         ids = indices[:, rank]
-        a, b = p0s[ids], p1s[ids]
+        a, b = p0s[ids, :2], p1s[ids, :2]
         vec = b - a
         lengths2 = np.einsum("ij,ij->i", vec, vec)
         t = np.clip(np.einsum("ij,ij->i", points_xy - a, vec) /
@@ -198,9 +200,11 @@ def classify_chunk(points_xyz, spatial, default_width, max_axis_distance, vertic
         best_dist[update] = dist[update]
         best_axis[update] = axis_ids[ids[update]]
         best_station[update] = (st0s[ids] + t * (st1s[ids] - st0s[ids]))[update]
-        best_lateral[update] = lateral[update]\n        best_axis_z[update] = (p0s[ids, 2] + t * (p1s[ids, 2] - p0s[ids, 2]))[update]
+        best_lateral[update] = lateral[update]
+        best_axis_z[update] = (p0s[ids, 2] + t * (p1s[ids, 2] - p0s[ids, 2]))[update]
 
-    keep = ((best_dist <= max_axis_distance) &\n            (np.abs(points_xyz[:, 2] - best_axis_z) <= vertical_tolerance))
+    keep = ((best_dist <= max_axis_distance) &
+            (np.abs(points_xyz[:, 2] - best_axis_z) <= vertical_tolerance))
     left_width = np.full(len(points_xy), default_width, dtype=float)
     right_width = np.full(len(points_xy), default_width, dtype=float)
     for axis_id, profile in enumerate(profiles):
@@ -226,7 +230,9 @@ def main():
     ap.add_argument("--remaining-out", type=Path, default=Path("output/remaining.las"))
     ap.add_argument("--default-width", type=float, default=1.1,
                     help="Default width on each side of axis, in metres (default: 1.1).")
-    ap.add_argument("--vertical-tolerance", type=float, default=0.10,\n                    help="Maximum vertical distance from the 3D axis, in metres (default: 0.10).")\n    ap.add_argument("--max-axis-distance", type=float, default=8.0,
+    ap.add_argument("--vertical-tolerance", type=float, default=0.10,
+                    help="Maximum vertical distance from the 3D axis, in metres (default: 0.10).")
+    ap.add_argument("--max-axis-distance", type=float, default=8.0,
                     help="Maximum XY distance from an axis for a point to be considered.")
     ap.add_argument("--max-control-distance", type=float, default=5.0)
     ap.add_argument("--min-perpendicularity", type=float, default=0.70)
@@ -239,7 +245,8 @@ def main():
                     help="Number of nearby indexed axis subsegments checked per point.")
     args = ap.parse_args()
 
-    if (args.default_width <= 0 or args.max_axis_distance <= 0 or\n            args.segment_length <= 0 or args.vertical_tolerance < 0):
+    if (args.default_width <= 0 or args.max_axis_distance <= 0 or
+            args.segment_length <= 0 or args.vertical_tolerance < 0):
         ap.error("Widths and distances must be positive.")
     if args.chunk_size < 1 or args.candidates < 1 or args.transition_length < 0:
         ap.error("Invalid chunk size, candidates or transition length.")
@@ -263,9 +270,11 @@ def main():
         with laspy.open(args.sidewalk_out, mode="w", header=reader.header) as sidewalk_writer, \
              laspy.open(args.remaining_out, mode="w", header=reader.header) as remaining_writer:
             for chunk_no, chunk in enumerate(reader.chunk_iterator(args.chunk_size), 1):
-                xy = np.column_stack((np.asarray(chunk.x), np.asarray(chunk.y)))
-                mask = classify_chunk(xy, spatial, args.default_width,
-                                      args.max_axis_distance, args.candidates)
+                xyz = np.column_stack((np.asarray(chunk.x), np.asarray(chunk.y),
+                                       np.asarray(chunk.z)))
+                mask = classify_chunk(xyz, spatial, args.default_width,
+                                      args.max_axis_distance, args.vertical_tolerance,
+                                      args.candidates)
                 sidewalk_writer.write_points(chunk[mask])
                 remaining_writer.write_points(chunk[~mask])
                 total += len(chunk)
